@@ -7,6 +7,7 @@
  */
 
 const router = require('express').Router();
+const https = require('https');
 const axios = require('axios');
 const { protect } = require('../middleware/auth');
 
@@ -18,6 +19,7 @@ const { getPayoutTier, getPayoutAmountForMax, HEATWAVE_THRESHOLD } = require('..
 const { resolvePricing } = require('../utils/pricing');
 const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 const OPEN_METEO_GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+const IPV4_HTTPS_AGENT = new https.Agent({ family: 4 });
 
 // ─── Heatwave Check (primary oracle for payout trigger) ───────────────────────
 router.get('/heatwave', protect, async (req, res) => {
@@ -192,7 +194,7 @@ function getAQICategory(pm25) {
 async function getOpenMeteoWeather({ lat, lng, city, user }) {
   const location = await resolveLocation({ lat, lng, city, user });
 
-  const data = await fetchJson(OPEN_METEO_FORECAST_URL, {
+  const data = await requestJson(OPEN_METEO_FORECAST_URL, {
     latitude: location.lat,
     longitude: location.lng,
     current: 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,precipitation,weather_code',
@@ -231,7 +233,7 @@ async function resolveLocation({ lat, lng, city, user }) {
   }
 
   const searchTerm = city || user?.city || 'Jaipur';
-  const data = await fetchJson(OPEN_METEO_GEOCODING_URL, {
+  const data = await requestJson(OPEN_METEO_GEOCODING_URL, {
     name: searchTerm,
     count: 1,
     language: 'en',
@@ -278,27 +280,19 @@ function buildHeatwaveResponse(fallback, user = {}) {
   };
 }
 
-async function fetchJson(baseUrl, params) {
-  const url = new URL(baseUrl);
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      url.searchParams.set(key, String(value));
-    }
-  });
-
-  const response = await fetch(url, {
+async function requestJson(baseUrl, params) {
+  const response = await axios.get(baseUrl, {
+    params,
+    timeout: 8000,
+    family: 4,
+    httpsAgent: IPV4_HTTPS_AGENT,
     headers: {
       Accept: 'application/json',
       'User-Agent': 'KavachForWork/1.0',
     },
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Open-Meteo request failed (${response.status}): ${body.slice(0, 200)}`);
-  }
-
-  return response.json();
+  return response.data;
 }
 
 function getWeatherCodeLabel(code) {
@@ -341,6 +335,13 @@ function describeError(error) {
   if (typeof error === 'string') return error;
   if (error.response?.data) {
     return JSON.stringify(error.response.data);
+  }
+  if (error.cause) {
+    const cause = error.cause.code ? `${error.cause.code}: ${error.cause.message}` : error.cause.message;
+    return `${error.message || 'Request error'} | cause: ${cause}`;
+  }
+  if (error.code) {
+    return `${error.code}: ${error.message || 'Request error'}`;
   }
   return error.stack || error.message || JSON.stringify(error);
 }
