@@ -16,6 +16,8 @@ if (!WEATHERSTACK_KEY) {
 }
 const { getPayoutTier, getPayoutAmountForMax, HEATWAVE_THRESHOLD } = require('../utils/constants');
 const { resolvePricing } = require('../utils/pricing');
+const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 
 // ─── Heatwave Check (primary oracle for payout trigger) ───────────────────────
 router.get('/heatwave', protect, async (req, res) => {
@@ -37,8 +39,7 @@ router.get('/heatwave', protect, async (req, res) => {
     const data = response.data;
 
     if (data.error) {
-      console.error('[Weather] API error:', data.error);
-      return res.status(502).json({ error: 'Weather service error', detail: data.error.info });
+      throw new Error(data.error.info || data.error.type || 'WeatherStack error');
     }
 
     const temp = data.current.temperature;
@@ -73,11 +74,21 @@ router.get('/heatwave', protect, async (req, res) => {
     });
   } catch (err) {
     console.error('[Weather] Heatwave check error:', err.message);
-    // Fallback: use mock data for demo/dev
-    if (process.env.NODE_ENV === 'development') {
-      return res.json(getMockWeatherData(req.user));
+    try {
+      const fallback = await getOpenMeteoWeather({
+        lat: req.query.lat,
+        lng: req.query.lng,
+        city: req.query.city,
+        user: req.user,
+      });
+      return res.json(buildHeatwaveResponse(fallback, req.user));
+    } catch (fallbackErr) {
+      console.error('[Weather] Open-Meteo fallback failed:', fallbackErr.message);
+      if (process.env.NODE_ENV === 'development') {
+        return res.json(getMockWeatherData(req.user));
+      }
+      res.status(502).json({ error: 'Weather API unavailable. Try again.' });
     }
-    res.status(502).json({ error: 'Weather API unavailable. Try again.' });
   }
 });
 
@@ -97,7 +108,7 @@ router.get('/current', async (req, res) => {
 
     const data = response.data;
     if (data.error) {
-      return res.status(502).json({ error: data.error.info });
+      throw new Error(data.error.info || data.error.type || 'WeatherStack error');
     }
 
     res.json({
@@ -110,7 +121,21 @@ router.get('/current', async (req, res) => {
       isHeatwave: data.current.temperature >= HEATWAVE_THRESHOLD,
     });
   } catch (err) {
-    res.status(502).json({ error: 'Weather service unavailable.' });
+    try {
+      const fallback = await getOpenMeteoWeather({ city: req.query.city || 'Jaipur' });
+      res.json({
+        city: fallback.city,
+        temperature: fallback.temperature,
+        feelsLike: fallback.feelsLike,
+        humidity: fallback.humidity,
+        condition: fallback.condition,
+        weatherIcon: null,
+        isHeatwave: fallback.temperature >= HEATWAVE_THRESHOLD,
+      });
+    } catch (fallbackErr) {
+      console.error('[Weather] Current weather fallback failed:', fallbackErr.message);
+      res.status(502).json({ error: 'Weather service unavailable.' });
+    }
   }
 });
 
@@ -162,6 +187,136 @@ function getAQICategory(pm25) {
   if (pm25 <= 150.4) return 'Unhealthy';
   if (pm25 <= 250.4) return 'Very Unhealthy';
   return 'Hazardous';
+}
+
+async function getOpenMeteoWeather({ lat, lng, city, user }) {
+  const location = await resolveLocation({ lat, lng, city, user });
+
+  const response = await axios.get(OPEN_METEO_FORECAST_URL, {
+    params: {
+      latitude: location.lat,
+      longitude: location.lng,
+      current: 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,precipitation,weather_code',
+      timezone: 'auto',
+      forecast_days: 1,
+    },
+    timeout: 8000,
+  });
+
+  const current = response.data?.current;
+  if (!current) {
+    throw new Error('Open-Meteo response missing current weather');
+  }
+
+  return {
+    city: location.city,
+    region: location.region,
+    country: location.country,
+    temperature: current.temperature_2m,
+    feelsLike: current.apparent_temperature,
+    humidity: current.relative_humidity_2m,
+    windSpeed: current.wind_speed_10m,
+    precipitation: current.precipitation || 0,
+    condition: getWeatherCodeLabel(current.weather_code),
+    timestamp: current.time,
+  };
+}
+
+async function resolveLocation({ lat, lng, city, user }) {
+  if (lat && lng) {
+    return {
+      lat: Number(lat),
+      lng: Number(lng),
+      city: city || user?.city || 'Jaipur',
+      region: user?.state || '',
+      country: 'India',
+    };
+  }
+
+  const searchTerm = city || user?.city || 'Jaipur';
+  const response = await axios.get(OPEN_METEO_GEOCODING_URL, {
+    params: {
+      name: searchTerm,
+      count: 1,
+      language: 'en',
+      format: 'json',
+    },
+    timeout: 8000,
+  });
+
+  const result = response.data?.results?.[0];
+  if (!result) {
+    throw new Error(`Could not geocode city: ${searchTerm}`);
+  }
+
+  return {
+    lat: result.latitude,
+    lng: result.longitude,
+    city: result.name || searchTerm,
+    region: result.admin1 || user?.state || '',
+    country: result.country || 'India',
+  };
+}
+
+function buildHeatwaveResponse(fallback, user = {}) {
+  const pricing = resolvePricing(user?.state, fallback.city || user?.city);
+  const payoutTier = getPayoutTier(fallback.temperature);
+
+  return {
+    temperature: fallback.temperature,
+    feelsLike: fallback.feelsLike,
+    humidity: fallback.humidity,
+    uvIndex: null,
+    windSpeed: fallback.windSpeed,
+    precipitation: fallback.precipitation,
+    condition: fallback.condition,
+    weatherIcon: null,
+    city: fallback.city,
+    region: fallback.region,
+    country: fallback.country,
+    isHeatwave: fallback.temperature >= HEATWAVE_THRESHOLD,
+    heatwaveThreshold: HEATWAVE_THRESHOLD,
+    pricing,
+    payoutTier,
+    payoutAmount: getPayoutAmountForMax(pricing.maxPayout, fallback.temperature),
+    timestamp: fallback.timestamp,
+    source: 'Open-Meteo',
+  };
+}
+
+function getWeatherCodeLabel(code) {
+  const labels = {
+    0: 'Clear sky',
+    1: 'Mainly clear',
+    2: 'Partly cloudy',
+    3: 'Overcast',
+    45: 'Fog',
+    48: 'Depositing rime fog',
+    51: 'Light drizzle',
+    53: 'Moderate drizzle',
+    55: 'Dense drizzle',
+    56: 'Light freezing drizzle',
+    57: 'Dense freezing drizzle',
+    61: 'Slight rain',
+    63: 'Moderate rain',
+    65: 'Heavy rain',
+    66: 'Light freezing rain',
+    67: 'Heavy freezing rain',
+    71: 'Slight snow',
+    73: 'Moderate snow',
+    75: 'Heavy snow',
+    77: 'Snow grains',
+    80: 'Slight rain showers',
+    81: 'Moderate rain showers',
+    82: 'Violent rain showers',
+    85: 'Slight snow showers',
+    86: 'Heavy snow showers',
+    95: 'Thunderstorm',
+    96: 'Thunderstorm with slight hail',
+    99: 'Thunderstorm with heavy hail',
+  };
+
+  return labels[code] || 'Unknown';
 }
 
 function getMockWeatherData(user = {}) {
