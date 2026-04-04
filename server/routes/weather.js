@@ -83,7 +83,7 @@ router.get('/heatwave', protect, async (req, res) => {
       });
       return res.json(buildHeatwaveResponse(fallback, req.user));
     } catch (fallbackErr) {
-      console.error('[Weather] Open-Meteo fallback failed:', fallbackErr.message);
+      console.error('[Weather] Open-Meteo fallback failed:', describeError(fallbackErr));
       if (process.env.NODE_ENV === 'development') {
         return res.json(getMockWeatherData(req.user));
       }
@@ -133,7 +133,7 @@ router.get('/current', async (req, res) => {
         isHeatwave: fallback.temperature >= HEATWAVE_THRESHOLD,
       });
     } catch (fallbackErr) {
-      console.error('[Weather] Current weather fallback failed:', fallbackErr.message);
+      console.error('[Weather] Current weather fallback failed:', describeError(fallbackErr));
       res.status(502).json({ error: 'Weather service unavailable.' });
     }
   }
@@ -192,18 +192,15 @@ function getAQICategory(pm25) {
 async function getOpenMeteoWeather({ lat, lng, city, user }) {
   const location = await resolveLocation({ lat, lng, city, user });
 
-  const response = await axios.get(OPEN_METEO_FORECAST_URL, {
-    params: {
-      latitude: location.lat,
-      longitude: location.lng,
-      current: 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,precipitation,weather_code',
-      timezone: 'auto',
-      forecast_days: 1,
-    },
-    timeout: 8000,
+  const data = await fetchJson(OPEN_METEO_FORECAST_URL, {
+    latitude: location.lat,
+    longitude: location.lng,
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,precipitation,weather_code',
+    timezone: 'auto',
+    forecast_days: 1,
   });
 
-  const current = response.data?.current;
+  const current = data?.current;
   if (!current) {
     throw new Error('Open-Meteo response missing current weather');
   }
@@ -234,17 +231,14 @@ async function resolveLocation({ lat, lng, city, user }) {
   }
 
   const searchTerm = city || user?.city || 'Jaipur';
-  const response = await axios.get(OPEN_METEO_GEOCODING_URL, {
-    params: {
-      name: searchTerm,
-      count: 1,
-      language: 'en',
-      format: 'json',
-    },
-    timeout: 8000,
+  const data = await fetchJson(OPEN_METEO_GEOCODING_URL, {
+    name: searchTerm,
+    count: 1,
+    language: 'en',
+    format: 'json',
   });
 
-  const result = response.data?.results?.[0];
+  const result = data?.results?.[0];
   if (!result) {
     throw new Error(`Could not geocode city: ${searchTerm}`);
   }
@@ -284,6 +278,29 @@ function buildHeatwaveResponse(fallback, user = {}) {
   };
 }
 
+async function fetchJson(baseUrl, params) {
+  const url = new URL(baseUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'KavachForWork/1.0',
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Open-Meteo request failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  return response.json();
+}
+
 function getWeatherCodeLabel(code) {
   const labels = {
     0: 'Clear sky',
@@ -317,6 +334,15 @@ function getWeatherCodeLabel(code) {
   };
 
   return labels[code] || 'Unknown';
+}
+
+function describeError(error) {
+  if (!error) return 'Unknown error';
+  if (typeof error === 'string') return error;
+  if (error.response?.data) {
+    return JSON.stringify(error.response.data);
+  }
+  return error.stack || error.message || JSON.stringify(error);
 }
 
 function getMockWeatherData(user = {}) {

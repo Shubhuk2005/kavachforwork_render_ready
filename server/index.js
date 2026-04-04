@@ -32,6 +32,9 @@ const { deductWeeklyPremiums } = require('./cron/premiums');
 const app = express();
 const server = http.createServer(app);
 
+// Render sits behind a proxy, so trust the forwarded client IP for rate limiting and auth logs.
+app.set('trust proxy', 1);
+
 // ─── Socket.io Setup ─────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
