@@ -46,8 +46,12 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
       - key: WEATHERSTACK_API_KEY
         sync: false
+      - key: OPENAQ_BASE_URL
+        value: https://api.openaq.org/v2
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: RAZORPAY_KEY_ID
