@@ -38,8 +38,20 @@ app.set('trust proxy', 1);
 // ─── Socket.io Setup ─────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed = [
+        process.env.CLIENT_URL || 'https://kavachforwork-web.onrender.com',
+        'capacitor://localhost', 'https://localhost', 'http://localhost',
+        'http://localhost:5173', 'http://localhost:5174',
+      ];
+      if (allowed.includes(origin) || /^http:\/\/(192\.168|10\.|172\.)/.test(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
@@ -60,8 +72,33 @@ io.on('connection', (socket) => {
 });
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  // Live Render frontend
+  process.env.CLIENT_URL || 'https://kavachforwork-web.onrender.com',
+  // Capacitor Android app origins (both http and https schemes)
+  'capacitor://localhost',
+  'https://localhost',
+  'http://localhost',
+  // Vite dev server
+  'http://localhost:5173',
+  'http://localhost:5174',
+  // LAN access from phones during development
+  /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
+  /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/,
+  /^http:\/\/172\.\d+\.\d+\.\d+:\d+$/,
+];
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, cURL)
+    if (!origin) return callback(null, true);
+    const allowed = ALLOWED_ORIGINS.some(o =>
+      typeof o === 'string' ? o === origin : o.test(origin)
+    );
+    if (allowed) return callback(null, true);
+    console.warn('[CORS] Blocked origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));

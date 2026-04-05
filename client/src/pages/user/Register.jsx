@@ -78,10 +78,8 @@ export default function Register() {
         formatted: resolved.formatted || [resolved.city, supportedState].filter(Boolean).join(', '),
       });
 
-      const sensorPayload = await collectSensorData({ requireLiveLocation: true });
-      if (sensorPayload.isNative && !sensorPayload.hardwareHeartbeat) {
-        throw new Error('Move the device once and try again so Sentry-AI can verify hardware activity.');
-      }
+      // Collect basic sensor data (location only) — Sentry-AI hardware check happens at claim time, not registration
+      await collectSensorData({ requireLiveLocation: true });
 
       setDeviceSynced(true);
       showToast('Verification complete', 'Live location and device check completed.');

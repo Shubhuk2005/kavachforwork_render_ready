@@ -191,9 +191,15 @@ export default function Home() {
             </div>
 
             <div className="mt-8 flex flex-wrap gap-3">
-              <Link to="/register" className="btn-primary px-8 py-3.5 text-base shadow-kavach">
-                Create Account →
-              </Link>
+              {user ? (
+                <Link to="/dashboard" className="btn-primary flex h-12 w-48 items-center justify-center">
+                  Go to Dashboard &rarr;
+                </Link>
+              ) : (
+                <Link to="/register" className="btn-primary flex h-12 w-48 items-center justify-center">
+                  Create Account &rarr;
+                </Link>
+              )}
               <Link to="/faqs" className="btn-secondary px-8 py-3.5 text-base">
                 Learn the flow
               </Link>

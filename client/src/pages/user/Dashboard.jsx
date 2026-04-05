@@ -64,6 +64,25 @@ export default function Dashboard() {
   const workerLabel = 'Gig Worker';
   const locationLabel = user?.city || 'India';
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-kavach-warm font-body">
+        <Navbar />
+        <div className="mx-auto max-w-4xl px-4 py-8">
+          <div className="mb-6 animate-pulse">
+            <div className="h-8 w-48 rounded bg-gray-200"></div>
+            <div className="mt-2 h-4 w-32 rounded bg-gray-200"></div>
+          </div>
+          <div className="mb-6 h-40 w-full animate-pulse rounded-2xl bg-gray-200"></div>
+          <div className="grid gap-6 md:grid-cols-2">
+            <div className="h-64 w-full animate-pulse rounded-2xl bg-gray-200"></div>
+            <div className="h-64 w-full animate-pulse rounded-2xl bg-gray-200"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-kavach-warm font-body">
       <Navbar />
